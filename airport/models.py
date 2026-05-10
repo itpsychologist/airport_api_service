@@ -8,18 +8,16 @@ class Airport(models.Model):
     city = models.CharField(max_length=100)
 
     class Meta:
-        verbose_name_plural = "Airports"
         ordering = ["name"]
 
     def __str__(self):
-        return self.name
+        return f"{self.name} ({self.city})"
 
 
 class AirplaneType(models.Model):
     name = models.CharField(max_length=100, unique=True)
 
     class Meta:
-        verbose_name_plural = "Airplane Types"
         ordering = ["name"]
 
     def __str__(self):
@@ -31,7 +29,7 @@ class Airplane(models.Model):
     rows = models.PositiveIntegerField()
     seats_in_row = models.PositiveIntegerField()
     airplane_type = models.ForeignKey(
-        AirplaneType, on_delete=models.CASCADE, related_name="airplane_type"
+        AirplaneType, on_delete=models.CASCADE, related_name="airplanes"
     )
 
     class Meta:
@@ -50,7 +48,7 @@ class Crew(models.Model):
     last_name = models.CharField(max_length=100)
 
     class Meta:
-        verbose_name_plural = "Crews"
+        verbose_name_plural = "Crew members"
         ordering = ["first_name", "last_name"]
 
     @property
@@ -63,17 +61,21 @@ class Crew(models.Model):
 
 class Route(models.Model):
     source = models.ForeignKey(
-        Airplane, on_delete=models.CASCADE, related_name="departing_routes"
+        Airport, on_delete=models.CASCADE, related_name="departing_routes"
     )
     destination = models.ForeignKey(
-        Airplane, on_delete=models.CASCADE, related_name="arriving_routes"
+        Airport, on_delete=models.CASCADE, related_name="arriving_routes"
     )
     distance = models.PositiveIntegerField(help_text="Distance in kilometers")
 
     class Meta:
-        verbose_name_plural = "Routes"
-        ordering = ["source", "destination"]
-        unique_together = ("source", "destination")
+        ordering = ["source__name", "destination__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source", "destination"],
+                name="unique_route_source_destination"
+            )
+        ]
 
     def clean(self):
         if self.source == self.destination:
@@ -84,7 +86,7 @@ class Route(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return self.source.name + " -> " + self.destination.name
+        return f"{self.source.name} -> {self.destination.name}"
 
 
 class Order(models.Model):
@@ -94,11 +96,10 @@ class Order(models.Model):
     )
 
     class Meta:
-        verbose_name_plural = "Orders"
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"Order #{self.id} by {self.user.username}"
+        return f"Order #{self.id} by {self.user.email}"
 
 
 class Flight(models.Model):
@@ -109,20 +110,25 @@ class Flight(models.Model):
     departure_time = models.DateTimeField()
     arrival_time = models.DateTimeField()
     crew = models.ManyToManyField(Crew, related_name="flights", blank=True)
-    tickets = models.ManyToManyField(
-        "Ticket", related_name="flight_tickets", blank=True
-    )
 
     @property
     def tickets_available(self) -> int:
         return self.airplane.capacity - self.tickets.count()
 
     class Meta:
-        verbose_name_plural = "Flights"
         ordering = ["departure_time"]
 
+    def clean(self):
+        if self.departure_time and self.arrival_time:
+            if self.arrival_time <= self.departure_time:
+                raise ValidationError("Arrival time must be after departure time.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return self.route.source.name + " -> " + self.route.destination.name
+        return f"{self.route} - " f'{self.departure_time.strftime("%Y-%m-%d %H:%M")}'
 
 
 class Ticket(models.Model):
@@ -133,10 +139,21 @@ class Ticket(models.Model):
 
     class Meta:
         ordering = ["flight", "row", "seat"]
-        unique_together = ["flight", "row", "seat"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["row", "seat", "flight"],
+                name="unique_ticket_flight_row_seat",
+            )
+        ]
 
     def clean(self):
         airplane = self.flight.airplane
+
+        if self.row < 1:
+            raise ValidationError({"row": "Row number must be at least 1."})
+
+        if self.seat < 1:
+            raise ValidationError({"seat": "Seat number must be at least 1."})
 
         if self.row > airplane.rows:
             raise ValidationError(

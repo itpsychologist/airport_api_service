@@ -1,6 +1,8 @@
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
+from django.db.models import Count
+from airport.filters import FlightFilter
 
 from airport.models import (
     Airport,
@@ -11,6 +13,8 @@ from airport.models import (
     Crew,
     Order,
 )
+
+from airport.permissions import IsAdminOrReadOnly
 
 from airport.serializers import (
     AirportSerializer,
@@ -34,16 +38,16 @@ from airport.serializers import (
 class AirportViewSet(viewsets.ModelViewSet):
     queryset = Airport.objects.all()
     serializer_class = AirportSerializer
-    permission_classes = (IsAuthenticated,)
-    filter_backends = (filters.SearchFilter, filters.OrderingFilter)
-    search_fields = ("name",)
-    ordering_fields = ("name",)
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["name", "city"]
+    ordering_fields = ["name"]
 
 
 class RouteViewSet(viewsets.ModelViewSet):
     queryset = Route.objects.select_related("source", "destination")
-    permission_classes = (IsAuthenticated,)
-    filter_backends = (DjangoFilterBackend, filters.OrderingFilter)
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ["source", "destination"]
     ordering_fields = ["distance"]
 
@@ -58,17 +62,19 @@ class RouteViewSet(viewsets.ModelViewSet):
 class AirplaneTypeViewSet(viewsets.ModelViewSet):
     queryset = AirplaneType.objects.all()
     serializer_class = AirplaneTypeSerializer
-    permission_classes = (IsAuthenticated,)
-    filter_backends = (filters.SearchFilter,)
-    search_fields = ("name",)
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ["name"]
 
 
 class AirplaneViewSet(viewsets.ModelViewSet):
     queryset = Airplane.objects.select_related("airplane_type")
-    permission_classes = (IsAuthenticated,)
-    filter_backends = (DjangoFilterBackend, filters.OrderingFilter)
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
+    filter_backends = [DjangoFilterBackend,
+                       filters.SearchFilter,
+                       filters.OrderingFilter]
     filterset_fields = ["airplane_type"]
-    search_fields = ("name",)
+    search_fields = ["name"]
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -79,17 +85,21 @@ class AirplaneViewSet(viewsets.ModelViewSet):
 
 
 class FlightViewSet(viewsets.ModelViewSet):
+    filterset_class = FlightFilter
+    queryset = Flight.objects.all()
 
-    queryset = Flight.objects.select_related(
-        "route__source", "route__destination", "airplane__airplane_type"
-    ).prefetch_related("crew", "tickets")
-    permission_classes = [IsAuthenticated]
+    def get_queryset(self):
+        return (
+            Flight.objects
+            .select_related(
+                "route__source", "route__destination", "airplane__airplane_type"
+            )
+            .prefetch_related("crew", "tickets")
+            .annotate(tickets_count=Count("tickets"))
+        )
+
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = {
-        "route": ["exact"],
-        "airplane": ["exact"],
-        "departure_time": ["gte", "lte", "exact", "date"],
-    }
     ordering_fields = ["departure_time", "arrival_time"]
 
     def get_serializer_class(self):
@@ -97,31 +107,32 @@ class FlightViewSet(viewsets.ModelViewSet):
             return FlightListSerializer
         if self.action == "retrieve":
             return FlightDetailSerializer
+
         return FlightSerializer
 
 
 class CrewViewSet(viewsets.ModelViewSet):
-
     queryset = Crew.objects.all()
     serializer_class = CrewSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["first_name", "last_name"]
     ordering_fields = ["last_name", "first_name"]
 
 
 class OrderViewSet(viewsets.ModelViewSet):
-
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.OrderingFilter]
     ordering_fields = ["created_at"]
 
     def get_queryset(self):
 
-        return Order.objects.filter(user=self.request.user).prefetch_related(
-            "tickets__flight__route__source",
-            "tickets__flight__route__destination",
-            "tickets__flight__airplane",
+        return (
+            Order.objects.filter(user=self.request.user).prefetch_related(
+                "tickets__flight__route__source",
+                "tickets__flight__route__destination",
+                "tickets__flight__airplane",
+            ).annotate(tickets_count=Count("tickets"))
         )
 
     def get_serializer_class(self):

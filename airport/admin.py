@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.db.models import Count
 
 from airport.models import (
     Airport,
@@ -14,8 +15,8 @@ from airport.models import (
 
 @admin.register(Airport)
 class AirportAdmin(admin.ModelAdmin):
-    list_display = ["name", "closest_big_city"]
-    search_fields = ["name", "closest_big_city"]
+    list_display = ["name", "city"]
+    search_fields = ["name", "city"]
     ordering = ["name"]
 
 
@@ -77,13 +78,17 @@ class FlightAdmin(admin.ModelAdmin):
 class OrderAdmin(admin.ModelAdmin):
     list_display = ["id", "user", "created_at", "tickets_count"]
     list_filter = ["created_at", "user"]
-    search_fields = ["user__username", "user__email"]
+    search_fields = ["user__email"]
     date_hierarchy = "created_at"
     inlines = [TicketInline]
 
-    @admin.display(description="Tickets")
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.annotate(tickets_count=Count("tickets"))
+
+    @admin.display(description="Tickets", ordering="tickets_count")
     def tickets_count(self, obj):
-        return obj.tickets.count()
+        return obj.tickets_count
 
 
 @admin.register(Ticket)

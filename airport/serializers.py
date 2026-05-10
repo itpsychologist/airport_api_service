@@ -16,7 +16,7 @@ class AirportSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Airport
-        fields = ["id", "name"]
+        fields = ["id", "name", "city"]
 
 
 class RouteSerializer(serializers.ModelSerializer):
@@ -54,11 +54,11 @@ class AirplaneSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Airplane
-        fields = ["id", "name", "rows", "seats_in_row", "airport_type"]
+        fields = ["id", "name", "rows", "seats_in_row", "airplane_type"]
 
 
 class AirplaneListSerializer(AirplaneSerializer):
-    airport_type = serializers.StringRelatedField()
+    airplane_type = serializers.StringRelatedField()
     capacity = serializers.IntegerField(required=False)
 
     class Meta:
@@ -67,7 +67,7 @@ class AirplaneListSerializer(AirplaneSerializer):
 
 
 class AirplaneDetailSerializer(AirplaneSerializer):
-    airplane_type = AirportTypeSerializer(read_only=True)
+    airplane_type = AirplaneTypeSerializer(read_only=True)
     capacity = serializers.IntegerField(required=False)
 
     class Meta:
@@ -103,7 +103,7 @@ class FlightSerializer(serializers.ModelSerializer):
 class FlightListSerializer(serializers.ModelSerializer):
     route = serializers.StringRelatedField()
     airplane = serializers.StringRelatedField()
-    tickets_available = serializers.IntegerField(read_only=True)
+    tickets_available = serializers.SerializerMethodField()
 
     class Meta:
         model = Flight
@@ -116,6 +116,11 @@ class FlightListSerializer(serializers.ModelSerializer):
             "tickets_available",
         ]
 
+    def get_tickets_available(self, obj) -> int:
+        """Calculate available seats on this flight."""
+        sold = getattr(obj, "tickets_count", obj.tickets.count())
+        return obj.airplane.capacity - sold
+
 
 class TicketSeatsSerializer(serializers.ModelSerializer):
 
@@ -125,12 +130,12 @@ class TicketSeatsSerializer(serializers.ModelSerializer):
 
 
 class FlightDetailSerializer(serializers.ModelSerializer):
-    route = RouteSerializer(read_only=True)
+    route = RouteDetailSerializer(read_only=True)
     airplane = AirplaneSerializer(read_only=True)
     crew = CrewSerializer(many=True, read_only=True)
     taken_seats = TicketSeatsSerializer(source="tickets", many=True, read_only=True)
 
-    tickets_available = serializers.IntegerField(read_only=True)
+    tickets_available = serializers.SerializerMethodField()
 
     class Meta:
         model = Flight
@@ -144,6 +149,9 @@ class FlightDetailSerializer(serializers.ModelSerializer):
             "taken_seats",
             "tickets_available",
         ]
+
+    def get_tickets_available(self, obj) -> int:
+        return obj.airplane.capacity - obj.tickets.count()
 
 
 class TicketSerializer(serializers.ModelSerializer):
@@ -160,6 +168,16 @@ class TicketSerializer(serializers.ModelSerializer):
         if flight:
             airplane = flight.airplane
 
+            if row is not None and row < 1:
+                raise serializers.ValidationError(
+                    {"row": "Row number must be at least 1."}
+                )
+
+            if seat is not None and seat < 1:
+                raise serializers.ValidationError(
+                    {"seat": "Seat number must be at least 1."}
+                )
+
             if row and row > airplane.rows:
                 raise serializers.ValidationError(
                     {"row": f"Row exceeds capacity. Max: {airplane.rows}"}
@@ -167,7 +185,7 @@ class TicketSerializer(serializers.ModelSerializer):
 
             if seat and seat > airplane.seats_in_row:
                 raise serializers.ValidationError(
-                    {"seat": f"Seat exceeds capacity. " f"Max: {airplane.seats_in_row}"}
+                    {"seat": f"Seat exceeds capacity. Max: {airplane.seats_in_row}"}
                 )
 
             # Check for duplicate booking
@@ -188,7 +206,7 @@ class TicketListSerializer(serializers.ModelSerializer):
 
 
 class OrderSerializer(serializers.ModelSerializer):
-    tickets = TicketSerializer(read_only=True)
+    tickets = TicketSerializer(many=True)
 
     class Meta:
         model = Order
@@ -198,12 +216,28 @@ class OrderSerializer(serializers.ModelSerializer):
     def validate_tickets(self, value):
         if not value:
             raise serializers.ValidationError("Order must contain at least one ticket.")
+        flights = set(ticket["flight"].id for ticket in value)
+        if len(flights) > 1:
+            raise serializers.ValidationError(
+                "All tickets in an order must be for the same flight."
+            )
+
         return value
 
     def create(self, validated_data):
         tickets_data = validated_data.pop("tickets")
 
         with transaction.atomic():
+
+            flight = tickets_data[0]["flight"]
+            Flight.objects.select_for_update().get(pk=flight.pk)
+            available = flight.airplane.capacity - flight.tickets.count()
+
+            if len(tickets_data) > available:
+                raise serializers.ValidationError(
+                    f"Not enough seats available. Only {available} seats left."
+                )
+
             order = Order.objects.create(**validated_data)
 
             for ticket_data in tickets_data:
@@ -214,7 +248,7 @@ class OrderSerializer(serializers.ModelSerializer):
 
 class OrderListSerializer(serializers.ModelSerializer):
 
-    tickets_count = serializers.IntegerField(source="tickets.count", read_only=True)
+    tickets_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Order
@@ -222,7 +256,7 @@ class OrderListSerializer(serializers.ModelSerializer):
 
 
 class OrderDetailSerializer(serializers.ModelSerializer):
-    tickets = TicketSerializer(many=True, read_only=True)
+    tickets = TicketListSerializer(many=True, read_only=True)
 
     class Meta:
         model = Order
