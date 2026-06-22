@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:16-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=airport_db
+      - POSTGRES_USER=airport_user
+      - POSTGRES_PASSWORD=airport_pass
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airport_user -d airport_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=False
+      - DATABASE_URL=postgres://airport_user:airport_pass@db:5432/airport_db
+      - DJANGO_SECRET_KEY=your-production-secret-key
+      - ALLOWED_HOSTS=localhost,127.0.0.1
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+
+volumes:
+  postgres_data:
+  static_volume:
+  media_volume:
