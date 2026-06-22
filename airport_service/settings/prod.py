@@ -14,19 +14,39 @@ if not ALLOWED_HOSTS:
         "Змінна середовища ALLOWED_HOSTS повинна бути встановлена у продакшні."
     )
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("POSTGRES_DB"),
-        "USER": os.getenv("POSTGRES_USER"),
-        "PASSWORD": os.getenv("POSTGRES_PASSWORD"),
-        "HOST": os.getenv("POSTGRES_HOST"),
-        "PORT": os.getenv("POSTGRES_DB_PORT", 5432),
-        "OPTIONS": {
-            "sslmode": "require",
-        },
+import dj_database_url
+
+if os.getenv("DATABASE_URL"):
+    DATABASES = {
+        "default": dj_database_url.config(
+            default=os.getenv("DATABASE_URL"),
+            conn_max_age=600
+        )
     }
-}
+    # Render or other platforms might already include sslmode in the connection string.
+    # We can override or default it to require.
+    if os.getenv("POSTGRES_SSLMODE"):
+        DATABASES["default"]["OPTIONS"] = {
+            "sslmode": os.getenv("POSTGRES_SSLMODE")
+        }
+    else:
+        DATABASES["default"]["OPTIONS"] = {
+            "sslmode": "require",
+        }
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.getenv("POSTGRES_DB"),
+            "USER": os.getenv("POSTGRES_USER"),
+            "PASSWORD": os.getenv("POSTGRES_PASSWORD"),
+            "HOST": os.getenv("POSTGRES_HOST"),
+            "PORT": os.getenv("POSTGRES_DB_PORT", 5432),
+            "OPTIONS": {
+                "sslmode": "require",
+            },
+        }
+    }
 
 # Захист безпеки
 SECURE_SSL_REDIRECT = True
